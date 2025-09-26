@@ -56,23 +56,25 @@ export default function NewsDetailScreen() {
     try {
       setLoading(true);
       
+      // Get the news data first
       const { data: newsData, error: newsError } = await supabase
         .from('trending_news')
-        .select(`
-          *,
-          trending_news_images(id, image_url, caption, order_index)
-        `)
+        .select('*')
         .eq('id', params.id)
         .single();
 
       if (newsError) throw newsError;
 
       if (newsData) {
-        const sortedImages = (newsData.trending_news_images || [])
-          .sort((a: any, b: any) => a.order_index - b.order_index);
+        // Get images separately
+        const { data: imagesData } = await supabase
+          .from('trending_news_images')
+          .select('id, image_url, caption, order_index')
+          .eq('trending_news_id', params.id)
+          .order('order_index');
 
-        const images = sortedImages.length > 0 
-          ? sortedImages.map((img: any) => ({
+        const images = imagesData && imagesData.length > 0 
+          ? imagesData.map((img: any) => ({
               id: img.id,
               image_url: img.image_url,
               caption: img.caption,
@@ -196,8 +198,9 @@ The success of this project demonstrates the power of strategic planning, dedica
             images={displayData.images}
             width={width}
             height={250}
-            autoScrollInterval={3000}
+            autoScrollInterval={0}
             showIndicators={true}
+            isVisible={false}
           />
           <View style={[styles.categoryBadge, { backgroundColor: colors.primary }]}>
             <Text style={styles.categoryText}>{displayData.category}</Text>

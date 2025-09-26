@@ -398,53 +398,62 @@ export default function HomeScreen() {
     try {
       console.log('🔄 Loading trending news...');
       
-      // Try to load from dedicated trending_news table first with images
-      const { data, error } = await supabase
+      // First, get trending news without the join to avoid relationship issues
+      const { data: newsData, error: newsError } = await supabase
         .from('trending_news')
-        .select(`
-          *,
-          trending_news_images(id, image_url, caption, order_index)
-        `)
-        .eq('is_active', true)
+        .select('*')
         .order('trending_score', { ascending: false })
         .limit(10);
 
-      if (error) throw error;
-      console.log('📊 Fetched trending news:', data?.length || 0);
+      console.log('📊 Trending news response:', { newsData, newsError });
 
-      if (data && data.length > 0) {
-        const mapped: TrendingNews[] = data.map((item: any) => {
-          // Sort images by order_index
-          const sortedImages = (item.trending_news_images || [])
-            .sort((a: any, b: any) => a.order_index - b.order_index);
-
-          return {
-            id: item.id,
-            headline: item.headline,
-            summary: item.summary || '',
-            thumbnail: item.thumbnail_url || 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg',
-            images: sortedImages.length > 0 ? sortedImages.map((img: any) => ({
-              id: img.id,
-              image_url: img.image_url,
-              caption: img.caption,
-              order_index: img.order_index
-            })) : [{
-              id: 'thumbnail',
-              image_url: item.thumbnail_url || 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg',
-              caption: 'Main image',
-              order_index: 0
-            }],
-            category: item.category || 'General',
-            publishedAt: item.published_at,
-            readTime: item.read_time || estimateReadTime(item.headline),
-            trending_score: item.trending_score || 50,
-            source: item.source || 'News Source',
-          };
-        });
+      if (newsError) {
+        console.error('❌ Trending news error:', newsError);
+        throw newsError;
+      }
+      
+      if (newsData && newsData.length > 0) {
+        console.log('✅ Found trending news in database, loading images...');
         
-        setTrendingNews(mapped);
-        console.log('✅ Trending news loaded from database');
+        // For each news item, get its images separately
+        const newsWithImages = await Promise.all(
+          newsData.map(async (item: any) => {
+            const { data: images } = await supabase
+              .from('trending_news_images')
+              .select('id, image_url, caption, order_index')
+              .eq('trending_news_id', item.id)
+              .order('order_index');
+
+            return {
+              id: item.id,
+              headline: item.headline,
+              summary: item.summary || '',
+              thumbnail: item.thumbnail_url || 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg',
+              images: images && images.length > 0 ? images.map((img: any) => ({
+                id: img.id,
+                image_url: img.image_url,
+                caption: img.caption,
+                order_index: img.order_index
+              })) : [{
+                id: 'thumbnail',
+                image_url: item.thumbnail_url || 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg',
+                caption: 'Main image',
+                order_index: 0
+              }],
+              category: item.category || 'General',
+              publishedAt: item.published_at,
+              readTime: item.read_time || estimateReadTime(item.headline),
+              trending_score: item.trending_score || 50,
+              source: item.source || 'News Source',
+            };
+          })
+        );
+        
+        console.log('✅ Loaded trending news with images:', newsWithImages);
+        setTrendingNews(newsWithImages);
         return;
+      } else {
+        console.log('⚠️ No trending news found in database');
       }
       
       throw new Error('No trending news found in database');

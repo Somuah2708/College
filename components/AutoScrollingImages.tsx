@@ -33,7 +33,7 @@ export default function AutoScrollingImages({
   const [isUserScrolling, setIsUserScrolling] = useState(false);
 
   useEffect(() => {
-    if (images.length <= 1 || !isVisible) return;
+    if (images.length <= 1 || !isVisible || autoScrollInterval === 0) return;
 
     const startAutoScroll = () => {
       if (intervalRef.current) {
