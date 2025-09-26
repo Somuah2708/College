@@ -5,6 +5,8 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Video, ResizeMode } from 'expo-av';
 import * as Linking from 'expo-linking';
+import AutoScrollingImages from '@/components/AutoScrollingImages';
+import { useItemVisibility } from '@/hooks/useItemVisibility';
 
 // Platform-specific WebView import
 let WebView: any;
@@ -107,6 +109,12 @@ interface TrendingNews {
   headline: string;
   summary: string;
   thumbnail: string;
+  images?: Array<{
+    id: string;
+    image_url: string;
+    caption?: string;
+    order_index: number;
+  }>;
   category: string;
   publishedAt: string;
   readTime: string;
@@ -280,6 +288,9 @@ export default function HomeScreen() {
   const [selectedUniversity, setSelectedUniversity] = useState<string | null>(null);
   const [universities, setUniversities] = useState<University[]>([]);
   
+  // Trending news visibility tracking
+  const { visibleIndex: visibleTrendingIndex, refs: trendingRefs, handleScroll: handleTrendingScroll } = useItemVisibility();
+  
   // Video playback state
   const [visibleVideoId, setVisibleVideoId] = useState<string | null>(null);
   const videoRefs = useRef<{[key: string]: Video}>({});
@@ -385,50 +396,107 @@ export default function HomeScreen() {
   };
   const loadTrendingNews = async () => {
     try {
-      // Get posts and map to trending news format
+      console.log('🔄 Loading trending news...');
+      
+      // Try to load from dedicated trending_news table first with images
       const { data, error } = await supabase
-        .from('posts')
-        .select(`id, author_name, caption, created_at, image_url, post_media(media_url, thumbnail_url, is_primary, order_index)`) 
-        .order('views_count', { ascending: false }) // Use views_count since trending_score doesn't exist
+        .from('trending_news')
+        .select(`
+          *,
+          trending_news_images(id, image_url, caption, order_index)
+        `)
+        .eq('is_active', true)
+        .order('trending_score', { ascending: false })
         .limit(10);
 
       if (error) throw error;
+      console.log('📊 Fetched trending news:', data?.length || 0);
 
-      const mapped: TrendingNews[] = (data || []).map((p: any) => {
-        const media = [...(p.post_media || [])].sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
-        const primary = media.find((m: any) => m.is_primary) || media[0];
-        
-        // Use post_media thumbnail or fallback to image_url or default
-        const thumbnail = primary?.thumbnail_url || primary?.media_url || p.image_url || 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg';
-        
-        const headline = p.caption || 'Update';
-        const readTime = estimateReadTime(headline);
-        
-        return {
-          id: p.id,
-          headline,
-          summary: p.caption || '',
-          thumbnail,
-          category: 'General', // Default since your table doesn't have category
-          publishedAt: p.created_at,
-          readTime,
-          trending_score: 50, // Default score since column doesn't exist
-          source: p.author_name || 'Source',
-        } as TrendingNews;
-      });
+      if (data && data.length > 0) {
+        const mapped: TrendingNews[] = data.map((item: any) => {
+          // Sort images by order_index
+          const sortedImages = (item.trending_news_images || [])
+            .sort((a: any, b: any) => a.order_index - b.order_index);
 
-      if (mapped.length > 0) {
+          return {
+            id: item.id,
+            headline: item.headline,
+            summary: item.summary || '',
+            thumbnail: item.thumbnail_url || 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg',
+            images: sortedImages.length > 0 ? sortedImages.map((img: any) => ({
+              id: img.id,
+              image_url: img.image_url,
+              caption: img.caption,
+              order_index: img.order_index
+            })) : [{
+              id: 'thumbnail',
+              image_url: item.thumbnail_url || 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg',
+              caption: 'Main image',
+              order_index: 0
+            }],
+            category: item.category || 'General',
+            publishedAt: item.published_at,
+            readTime: item.read_time || estimateReadTime(item.headline),
+            trending_score: item.trending_score || 50,
+            source: item.source || 'News Source',
+          };
+        });
+        
         setTrendingNews(mapped);
+        console.log('✅ Trending news loaded from database');
         return;
       }
-      // Fallback to existing mock if no data
-      throw new Error('No trending posts found');
+      
+      throw new Error('No trending news found in database');
     } catch (e) {
-      // Keep existing UI experience with mock data when backend is empty
+      console.log('⚠️ Using fallback trending news data');
+      // Fallback to existing mock data when database is empty
       const mockNews: TrendingNews[] = [
-        { id: 'mock-1', headline: 'New STEM Scholarship Program Launches', summary: 'Government announces $50M funding for science students', thumbnail: 'https://images.pexels.com/photos/1181467/pexels-photo-1181467.jpeg', category: 'Scholarships', publishedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), readTime: '3 min read', trending_score: 95, source: 'Ministry of Education' },
-        { id: 'mock-2', headline: 'University Admission Deadlines Extended', summary: 'Technical issues prompt deadline extension for major universities', thumbnail: 'https://images.pexels.com/photos/1454360/pexels-photo-1454360.jpeg', category: 'Admissions', publishedAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(), readTime: '2 min read', trending_score: 88, source: 'University News' },
-        { id: 'mock-3', headline: 'AI Program Rankings Released', summary: 'Top universities for artificial intelligence studies revealed', thumbnail: 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg', category: 'Rankings', publishedAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(), readTime: '4 min read', trending_score: 82, source: 'Education Weekly' }
+        { 
+          id: 'mock-1', 
+          headline: 'New STEM Scholarship Program Launches', 
+          summary: 'Government announces $50M funding for science students', 
+          thumbnail: 'https://images.pexels.com/photos/1181467/pexels-photo-1181467.jpeg', 
+          images: [
+            { id: 'mock-img-1', image_url: 'https://images.pexels.com/photos/1181467/pexels-photo-1181467.jpeg', caption: 'Students in lab', order_index: 0 },
+            { id: 'mock-img-2', image_url: 'https://images.pexels.com/photos/3184454/pexels-photo-3184454.jpeg', caption: 'Research facility', order_index: 1 }
+          ],
+          category: 'Scholarships', 
+          publishedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), 
+          readTime: '3 min read', 
+          trending_score: 95, 
+          source: 'Ministry of Education' 
+        },
+        { 
+          id: 'mock-2', 
+          headline: 'University Admission Deadlines Extended', 
+          summary: 'Technical issues prompt deadline extension for major universities', 
+          thumbnail: 'https://images.pexels.com/photos/1454360/pexels-photo-1454360.jpeg', 
+          images: [
+            { id: 'mock-img-3', image_url: 'https://images.pexels.com/photos/1454360/pexels-photo-1454360.jpeg', caption: 'University building', order_index: 0 },
+            { id: 'mock-img-4', image_url: 'https://images.pexels.com/photos/159844/cellular-education-classroom-159844.jpeg', caption: 'Students studying', order_index: 1 }
+          ],
+          category: 'Admissions', 
+          publishedAt: new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString(), 
+          readTime: '2 min read', 
+          trending_score: 88, 
+          source: 'University News' 
+        },
+        { 
+          id: 'mock-3', 
+          headline: 'AI Program Rankings Released', 
+          summary: 'Top universities for artificial intelligence studies revealed', 
+          thumbnail: 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg', 
+          images: [
+            { id: 'mock-img-5', image_url: 'https://images.pexels.com/photos/373543/pexels-photo-373543.jpeg', caption: 'Computer science lab', order_index: 0 },
+            { id: 'mock-img-6', image_url: 'https://images.pexels.com/photos/3861969/pexels-photo-3861969.jpeg', caption: 'AI technology', order_index: 1 }
+          ],
+          category: 'Rankings', 
+          publishedAt: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(), 
+          readTime: '4 min read', 
+          trending_score: 82, 
+          source: 'Education Weekly' 
+        }
       ];
       setTrendingNews(mockNews);
     }
@@ -920,10 +988,17 @@ export default function HomeScreen() {
         <TrendingUp size={20} color="#EF4444" />
         <Text style={styles.trendingTitle}>Trending Now</Text>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.trendingContainer}>
-        {trendingNews.map((news) => (
+      <ScrollView 
+        horizontal 
+        showsHorizontalScrollIndicator={false} 
+        style={styles.trendingContainer}
+        onScroll={handleTrendingScroll}
+        scrollEventThrottle={16}
+      >
+        {trendingNews.map((news, index) => (
           <TouchableOpacity
             key={news.id}
+            ref={(ref) => trendingRefs.current[index] = ref}
             style={styles.trendingCard}
             onPress={() => router.push({
               pathname: '/news-detail',
@@ -940,7 +1015,20 @@ export default function HomeScreen() {
               }
             })}
           >
-            <Image source={{ uri: news.thumbnail }} style={styles.trendingImage} />
+            {/* Use AutoScrollingImages component for multiple images */}
+            <AutoScrollingImages
+              images={news.images || [{ 
+                id: 'thumbnail', 
+                image_url: news.thumbnail, 
+                caption: 'Main image', 
+                order_index: 0 
+              }]}
+              width={280}
+              height={160}
+              autoScrollInterval={2000}
+              showIndicators={true}
+              isVisible={index === visibleTrendingIndex}
+            />
             <LinearGradient
               colors={['transparent', 'rgba(0,0,0,0.8)']}
               style={styles.trendingOverlay}
